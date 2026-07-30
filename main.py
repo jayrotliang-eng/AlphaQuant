@@ -8,6 +8,8 @@ import pandas as pd
 from modules.scanner import Scanner
 from modules.universe import Universe
 from modules.ai_analyzer import AIAnalyzer
+from modules.fundamentals import FundamentalAnalyzer
+from modules.news import NewsAnalyzer
 from modules.sheet import GoogleSheet
 from config.settings import (
     AI_TOP,
@@ -21,6 +23,7 @@ from config.settings import (
     breakout_to_chinese,
     rating_to_chinese
 )
+from config.watchlist import WATCHLIST
 
 
 # =========================
@@ -41,8 +44,9 @@ symbols = universe.get_symbols()
 
 print(f"\n📊 AlphaQuant 每日扫描")
 print(f"   股票池: {len(symbols)} 支美股")
+print(f"   关注清单: {len(WATCHLIST)} 支")
 print(f"   最低分数: {MIN_SCORE} 分")
-print(f"   AI 深度分析: 前 {AI_TOP} 名")
+print(f"   AI 深度分析: 前 {AI_TOP} 名 + 关注清单")
 print(f"   最终精选: 前 {FINAL_TOP} 名")
 print(f"\n{'='*50}\n")
 
@@ -80,46 +84,107 @@ else:
 
 
 # =========================
-# AI 分析 Top N
+# 合并关注清单
 # =========================
 
+# 确保关注清单的股票也被扫描
+watchlist_in_result = result[result["Symbol"].isin(WATCHLIST)].copy()
 top_for_ai = result.head(AI_TOP).copy()
 
-# 预先建立 AI 列（避免类型冲突）
-top_for_ai["AI评级"] = ""
-top_for_ai["信心度"] = 0
-top_for_ai["风险等级"] = ""
-top_for_ai["买入价"] = ""
-top_for_ai["止损价"] = ""
-top_for_ai["目标价"] = ""
-top_for_ai["一句话总结"] = ""
-top_for_ai["操作建议"] = ""
+# 合并：Top N + 关注清单（去重）
+combined = pd.concat([top_for_ai, watchlist_in_result]).drop_duplicates(subset="Symbol").reset_index(drop=True)
 
-print(f"🤖 AI 正在深度分析前 {len(top_for_ai)} 名...\n")
+print(f"🔗 合并分析: Top {AI_TOP} ({len(top_for_ai)}支) + 关注清单 ({len(watchlist_in_result)}支)")
+print(f"   去重后总共: {len(combined)} 支需要 AI 分析\n")
 
+
+# =========================
+# 基本面 + 新闻 + AI 综合分析
+# =========================
+
+# 预先建立列
+combined["AI评级"] = ""
+combined["信心度"] = 0
+combined["风险等级"] = ""
+combined["买入价"] = ""
+combined["止损价"] = ""
+combined["目标价"] = ""
+combined["持有周期"] = ""
+combined["技术面评价"] = ""
+combined["基本面评价"] = ""
+combined["新闻面评价"] = ""
+combined["一句话总结"] = ""
+combined["操作建议"] = ""
+combined["行业"] = ""
+combined["市值"] = ""
+combined["估值"] = ""
+combined["成长性"] = ""
+combined["财务健康"] = ""
+combined["新闻情绪"] = ""
+combined["关键事件"] = ""
+combined["是否关注"] = ""
+
+print(f"🤖 开始三维度深度分析...\n")
+
+fund_analyzer = FundamentalAnalyzer()
+news_analyzer = NewsAnalyzer()
 ai = AIAnalyzer()
 
-for index, row in top_for_ai.iterrows():
+for index, row in combined.iterrows():
 
-    print(f"   分析中: {row['Symbol']}...")
+    symbol = row["Symbol"]
+    is_watchlist = "⭐" if symbol in WATCHLIST else ""
+    combined.loc[index, "是否关注"] = is_watchlist
 
-    analysis = ai.analyze(row)
+    print(f"   [{index+1}/{len(combined)}] {symbol} {is_watchlist}")
 
-    top_for_ai.loc[index, "AI评级"] = str(analysis.get("rating", "N/A"))
-    top_for_ai.loc[index, "信心度"] = analysis.get("confidence", 0)
-    top_for_ai.loc[index, "风险等级"] = str(analysis.get("risk", "N/A"))
-    top_for_ai.loc[index, "买入价"] = str(analysis.get("entry", "N/A"))
-    top_for_ai.loc[index, "止损价"] = str(analysis.get("stoploss", "N/A"))
-    top_for_ai.loc[index, "目标价"] = str(analysis.get("target", "N/A"))
-    top_for_ai.loc[index, "一句话总结"] = str(analysis.get("summary", "N/A"))
-    top_for_ai.loc[index, "操作建议"] = str(analysis.get("action", "N/A"))
+    # Step 1: 基本面
+    print(f"      📊 基本面分析...")
+    fundamentals = fund_analyzer.analyze(symbol)
+    combined.loc[index, "行业"] = f"{fundamentals.get('sector', '')} / {fundamentals.get('industry', '')}"
+    combined.loc[index, "市值"] = str(fundamentals.get("market_cap", "N/A"))
+    combined.loc[index, "估值"] = str(fundamentals.get("valuation", "N/A"))
+    combined.loc[index, "成长性"] = str(fundamentals.get("growth", "N/A"))
+    combined.loc[index, "财务健康"] = str(fundamentals.get("health", "N/A"))
+
+    # Step 2: 新闻情绪
+    print(f"      📰 新闻情绪分析...")
+    news = news_analyzer.analyze(
+        symbol,
+        sector=fundamentals.get("sector", ""),
+        industry=fundamentals.get("industry", "")
+    )
+    combined.loc[index, "新闻情绪"] = str(news.get("sentiment", "N/A"))
+    combined.loc[index, "关键事件"] = str(news.get("key_events", "N/A"))
+
+    # Step 3: AI 综合判断
+    print(f"      🤖 AI 综合判断...")
+    analysis = ai.analyze(row, fundamentals=fundamentals, news=news)
+
+    combined.loc[index, "AI评级"] = str(analysis.get("rating", "N/A"))
+    combined.loc[index, "信心度"] = analysis.get("confidence", 0)
+    combined.loc[index, "风险等级"] = str(analysis.get("risk", "N/A"))
+    combined.loc[index, "买入价"] = str(analysis.get("entry", "N/A"))
+    combined.loc[index, "止损价"] = str(analysis.get("stoploss", "N/A"))
+    combined.loc[index, "目标价"] = str(analysis.get("target", "N/A"))
+    combined.loc[index, "持有周期"] = str(analysis.get("timeframe", "N/A"))
+    combined.loc[index, "技术面评价"] = str(analysis.get("technical_view", "N/A"))
+    combined.loc[index, "基本面评价"] = str(analysis.get("fundamental_view", "N/A"))
+    combined.loc[index, "新闻面评价"] = str(analysis.get("news_view", "N/A"))
+    combined.loc[index, "一句话总结"] = str(analysis.get("summary", "N/A"))
+    combined.loc[index, "操作建议"] = str(analysis.get("action", "N/A"))
+
+    print(f"      ✅ 完成 → {analysis.get('rating', 'N/A')}\n")
 
 
 # =========================
-# 最终 Top 10（中文化）
+# 最终 Top 10
 # =========================
 
-final_top = top_for_ai.head(FINAL_TOP).copy()
+# 按信心度排序
+combined["信心度"] = pd.to_numeric(combined["信心度"], errors="coerce").fillna(0)
+final_top = combined.sort_values("信心度", ascending=False).head(FINAL_TOP).copy()
+final_top["Rank"] = range(1, len(final_top) + 1)
 
 # 加入中文化的列
 final_top["评分等级"] = final_top["Score"].apply(score_to_stars)
@@ -133,47 +198,65 @@ final_top["AI建议"] = final_top["AI评级"].apply(rating_to_chinese)
 # 显示结果（终端）
 # =========================
 
-print(f"\n{'='*50}")
+print(f"\n{'='*60}")
 print(f"🏆 ========== ALPHAQUANT 今日精选 TOP {FINAL_TOP} ==========")
-print(f"{'='*50}\n")
-
-display_cols = [
-    "Rank", "Symbol", "Close", "Score", "评分等级",
-    "趋势", "动能", "是否突破",
-    "AI建议", "信心度", "买入价", "止损价", "目标价"
-]
-
-print(final_top[display_cols].to_string(index=False))
-
-print(f"\n{'='*50}")
-print(f"\n📝 AI 一句话总结：\n")
+print(f"{'='*60}\n")
 
 for _, row in final_top.iterrows():
-    print(f"   {row['Rank']}. {row['Symbol']} (${row['Close']})")
-    print(f"      💡 {row['一句话总结']}")
-    print(f"      🎯 {row['操作建议']}")
+    watchmark = row["是否关注"]
+    print(f"{'─'*50}")
+    print(f"  {row['Rank']}. {row['Symbol']} {watchmark} — ${row['Close']}  |  评分: {row['Score']}分 {row['评分等级']}")
+    print(f"     {row['趋势']} | {row['动能']} | 突破: {row['是否突破']}")
+    print(f"     📊 基本面: {row['估值']} | {row['成长性']} | {row['财务健康']}")
+    print(f"     📰 新闻: {row['新闻情绪']} — {row['关键事件'][:40]}")
+    print(f"     🤖 AI建议: {row['AI建议']} (信心 {row['信心度']}%)")
+    print(f"     💰 买入: ${row['买入价']} → 目标: ${row['目标价']} | 🛑 止损: ${row['止损价']}")
+    print(f"     ⏰ 持有周期: {row['持有周期']} | 风险: {row['风险等级']}")
+    print(f"     💡 {row['一句话总结']}")
+    print(f"     🎯 {row['操作建议']}")
     print()
 
 
 # =========================
-# 准备 Google Sheet 数据（小白友好版）
+# 关注清单报告
+# =========================
+
+watchlist_results = combined[combined["是否关注"] == "⭐"].copy()
+
+if not watchlist_results.empty:
+    print(f"\n{'='*60}")
+    print(f"⭐ ========== 关注清单报告 ==========")
+    print(f"{'='*60}\n")
+
+    for _, row in watchlist_results.iterrows():
+        print(f"  {row['Symbol']} — ${row['Close']} | 评分: {row['Score']}分")
+        print(f"     AI: {row['AI评级']} | {row['一句话总结']}")
+        print(f"     🎯 {row['操作建议']}")
+        print()
+
+
+# =========================
+# 准备 Google Sheet 数据
 # =========================
 
 sheet_data = final_top[[
     "Rank", "Symbol", "Close", "Score", "评分等级",
     "趋势", "动能", "是否突破",
-    "AI建议", "信心度", "风险等级",
+    "行业", "估值", "成长性", "财务健康",
+    "新闻情绪", "关键事件",
+    "AI建议", "信心度", "风险等级", "持有周期",
     "买入价", "止损价", "目标价",
-    "一句话总结", "操作建议"
+    "一句话总结", "操作建议", "是否关注"
 ]].copy()
 
-# 重命名列（让 Google Sheet 更好看）
 sheet_data.columns = [
     "排名", "股票代码", "现价($)", "综合评分", "评分等级",
     "趋势方向", "上涨动能", "是否突破阻力",
-    "AI建议", "AI信心度(%)", "风险等级",
+    "所属行业", "估值水平", "成长性", "财务健康",
+    "新闻情绪", "近期关键事件",
+    "AI建议", "AI信心度(%)", "风险等级", "建议持有周期",
     "建议买入价($)", "止损价($)", "目标价($)",
-    "一句话总结", "具体操作建议"
+    "一句话总结", "具体操作建议", "关注清单"
 ]
 
 
@@ -183,7 +266,7 @@ sheet_data.columns = [
 
 result.to_csv(FULL_OUTPUT_FILE, index=False)
 final_top.to_csv(OUTPUT_FILE, index=False)
-top_for_ai.to_csv("output/top_ai_full.csv", index=False)
+combined.to_csv("output/top_ai_full.csv", index=False)
 
 
 # =========================
@@ -195,45 +278,28 @@ print(f"\n📤 正在更新 Google Sheet...\n")
 try:
 
     gs = GoogleSheet()
-
-    # 写入精选 Top 10（小白友好版）
     gs.update("AlphaQuant", sheet_data, "今日精选")
 
-    # 也写入完整 AI 分析结果
-    ai_full_sheet = top_for_ai[[
-        "Rank", "Symbol", "Close", "Score",
-        "Trend", "Momentum", "Breakout",
-        "AI评级", "信心度", "风险等级",
-        "买入价", "止损价", "目标价",
-        "一句话总结", "操作建议"
-    ]].copy()
+    # 关注清单单独一个 sheet
+    if not watchlist_results.empty:
+        watchlist_sheet = watchlist_results[[
+            "Symbol", "Close", "Score",
+            "AI评级", "信心度", "风险等级",
+            "买入价", "止损价", "目标价",
+            "一句话总结", "操作建议"
+        ]].copy()
 
-    ai_full_sheet.columns = [
-        "排名", "股票代码", "现价($)", "综合评分",
-        "趋势", "动能", "突破",
-        "AI评级", "信心度(%)", "风险等级",
-        "买入价($)", "止损价($)", "目标价($)",
-        "一句话总结", "操作建议"
-    ]
+        watchlist_sheet.columns = [
+            "股票代码", "现价($)", "综合评分",
+            "AI评级", "信心度(%)", "风险等级",
+            "买入价($)", "止损价($)", "目标价($)",
+            "一句话总结", "操作建议"
+        ]
 
-    gs.update("AlphaQuant", ai_full_sheet, "AI完整分析")
+        gs.update("AlphaQuant", watchlist_sheet, "关注清单")
 
 except Exception as e:
-
     print(f"⚠️ Google Sheet 跳过: {e}")
-    print(f"   （如果还没设置 credentials.json，这是正常的）")
-
-
-# =========================
-# 完成
-# =========================
-
-print(f"\n{'='*50}")
-print(f"📁 全部扫描结果: {FULL_OUTPUT_FILE}")
-print(f"📁 AI 完整分析: output/top_ai_full.csv")
-print(f"📁 今日精选 Top {FINAL_TOP}: {OUTPUT_FILE}")
-print(f"{'='*50}")
-print(f"\n✅ AlphaQuant 今日扫描完成！打开 Google Sheet 查看结果 📱\n")
 
 
 # =========================
@@ -251,6 +317,21 @@ try:
     bot.send(message)
 
 except Exception as e:
-
     print(f"⚠️ Telegram 跳过: {e}")
+
+
+# =========================
+# 完成
+# =========================
+
+print(f"\n{'='*50}")
+print(f"📁 全部扫描结果: {FULL_OUTPUT_FILE}")
+print(f"📁 AI 完整分析: output/top_ai_full.csv")
+print(f"📁 今日精选 Top {FINAL_TOP}: {OUTPUT_FILE}")
+print(f"{'='*50}")
+print(f"\n✅ AlphaQuant 今日扫描完成！\n")
+print(f"   📱 Telegram 已推送")
+print(f"   📊 Google Sheet 已更新")
+print(f"   ⭐ 关注清单已分析")
+print(f"\n   打开手机查看结果吧！📱\n")
 

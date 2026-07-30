@@ -1,3 +1,4 @@
+
 pandas
 yfinance
 ta
@@ -8,3 +9,4 @@ google-auth
 requests
 beautifulsoup4
 lxml
+

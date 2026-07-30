@@ -3,10 +3,8 @@ name: AlphaQuant Daily Scan
 
 on:
   schedule:
-    # 每天 UTC 01:00 = 新加坡时间 09:00
-    - cron: '0 1 * * 1-5'
-
-  # 也可以手动触发（测试用）
+    - cron: '30 0 * * 1-5'   # UTC 00:30 = 新加坡 08:30
+    - cron: '30 7 * * 1-5'   # UTC 07:30 = 新加坡 15:30
   workflow_dispatch:
 
 jobs:
