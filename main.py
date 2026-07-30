@@ -235,3 +235,22 @@ print(f"📁 今日精选 Top {FINAL_TOP}: {OUTPUT_FILE}")
 print(f"{'='*50}")
 print(f"\n✅ AlphaQuant 今日扫描完成！打开 Google Sheet 查看结果 📱\n")
 
+
+# =========================
+# Telegram 推送
+# =========================
+
+print(f"\n📱 正在推送到 Telegram...\n")
+
+try:
+
+    from modules.telegram import TelegramBot
+
+    bot = TelegramBot()
+    message = bot.format_top10(final_top)
+    bot.send(message)
+
+except Exception as e:
+
+    print(f"⚠️ Telegram 跳过: {e}")
+
