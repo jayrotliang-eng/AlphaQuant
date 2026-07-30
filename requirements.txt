@@ -1,0 +1,10 @@
+pandas
+yfinance
+ta
+openai
+python-dotenv
+gspread
+google-auth
+requests
+beautifulsoup4
+lxml
