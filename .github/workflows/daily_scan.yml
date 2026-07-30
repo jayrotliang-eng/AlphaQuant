@@ -1,0 +1,50 @@
+
+name: AlphaQuant Daily Scan
+
+on:
+  schedule:
+    # 每天 UTC 01:00 = 新加坡时间 09:00
+    - cron: '0 1 * * 1-5'
+
+  # 也可以手动触发（测试用）
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Create credentials.json
+        run: |
+          echo '${{ secrets.GOOGLE_CREDENTIALS }}' > credentials.json
+
+      - name: Create .env file
+        run: |
+          echo "OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}" > .env
+
+      - name: Update S&P500 stock list
+        run: python update_sp500.py
+
+      - name: Run AlphaQuant scan
+        run: python main.py
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-results
+          path: output/
+          retention-days: 30
+
