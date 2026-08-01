@@ -1,10 +1,11 @@
 
 import os
+import pandas as pd
 from dotenv import load_dotenv
 
+# 载入 .env 文件
 load_dotenv()
 
-import pandas as pd
 from modules.scanner import Scanner
 from modules.universe import Universe
 from modules.ai_analyzer import AIAnalyzer
@@ -87,11 +88,9 @@ else:
 # 合并关注清单
 # =========================
 
-# 确保关注清单的股票也被扫描
 watchlist_in_result = result[result["Symbol"].isin(WATCHLIST)].copy()
 top_for_ai = result.head(AI_TOP).copy()
 
-# 合并：Top N + 关注清单（去重）
 combined = pd.concat([top_for_ai, watchlist_in_result]).drop_duplicates(subset="Symbol").reset_index(drop=True)
 
 print(f"🔗 合并分析: Top {AI_TOP} ({len(top_for_ai)}支) + 关注清单 ({len(watchlist_in_result)}支)")
@@ -102,7 +101,6 @@ print(f"   去重后总共: {len(combined)} 支需要 AI 分析\n")
 # 基本面 + 新闻 + AI 综合分析
 # =========================
 
-# 预先建立列
 combined["AI评级"] = ""
 combined["信心度"] = 0
 combined["风险等级"] = ""
@@ -141,7 +139,7 @@ for index, row in combined.iterrows():
     # Step 1: 基本面
     print(f"      📊 基本面分析...")
     fundamentals = fund_analyzer.analyze(symbol)
-    combined.loc[index, "行业"] = f"{fundamentals.get('sector', '')} / {fundamentals.get('industry', '')}"
+    combined.loc[index, "行业"] = f"{fundamentals.get('sector','')} / {fundamentals.get('industry', '')}"
     combined.loc[index, "市值"] = str(fundamentals.get("market_cap", "N/A"))
     combined.loc[index, "估值"] = str(fundamentals.get("valuation", "N/A"))
     combined.loc[index, "成长性"] = str(fundamentals.get("growth", "N/A"))
@@ -181,12 +179,10 @@ for index, row in combined.iterrows():
 # 最终 Top 10
 # =========================
 
-# 按信心度排序
 combined["信心度"] = pd.to_numeric(combined["信心度"], errors="coerce").fillna(0)
 final_top = combined.sort_values("信心度", ascending=False).head(FINAL_TOP).copy()
 final_top["Rank"] = range(1, len(final_top) + 1)
 
-# 加入中文化的列
 final_top["评分等级"] = final_top["Score"].apply(score_to_stars)
 final_top["趋势"] = final_top["Trend"].apply(trend_to_chinese)
 final_top["动能"] = final_top["Momentum"].apply(momentum_to_chinese)
@@ -276,11 +272,9 @@ combined.to_csv("output/top_ai_full.csv", index=False)
 print(f"\n📤 正在更新 Google Sheet...\n")
 
 try:
-
     gs = GoogleSheet()
     gs.update("AlphaQuant", sheet_data, "今日精选")
 
-    # 关注清单单独一个 sheet
     if not watchlist_results.empty:
         watchlist_sheet = watchlist_results[[
             "Symbol", "Close", "Score",
@@ -298,8 +292,10 @@ try:
 
         gs.update("AlphaQuant", watchlist_sheet, "关注清单")
 
+    print(f"   ✅ Google Sheet 更新完成")
+
 except Exception as e:
-    print(f"⚠️ Google Sheet 跳过: {e}")
+    print(f"   ⚠️ Google Sheet 跳过: {e}")
 
 
 # =========================
@@ -309,15 +305,13 @@ except Exception as e:
 print(f"\n📱 正在推送到 Telegram...\n")
 
 try:
-
     from modules.telegram import TelegramBot
 
     bot = TelegramBot()
-    message = bot.format_top10(final_top)
-    bot.send(message)
+    bot.send_full_report(final_top, watchlist_results)
 
 except Exception as e:
-    print(f"⚠️ Telegram 跳过: {e}")
+    print(f"   ⚠️ Telegram 跳过: {e}")
 
 
 # =========================
@@ -330,8 +324,4 @@ print(f"📁 AI 完整分析: output/top_ai_full.csv")
 print(f"📁 今日精选 Top {FINAL_TOP}: {OUTPUT_FILE}")
 print(f"{'='*50}")
 print(f"\n✅ AlphaQuant 今日扫描完成！\n")
-print(f"   📱 Telegram 已推送")
-print(f"   📊 Google Sheet 已更新")
-print(f"   ⭐ 关注清单已分析")
-print(f"\n   打开手机查看结果吧！📱\n")
 

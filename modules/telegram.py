@@ -11,7 +11,6 @@ class TelegramBot:
         self.base_url = f"https://api.telegram.org/bot{self.token}"
 
     def send(self, message):
-        """发送消息到 Telegram"""
 
         if not self.token or not self.chat_id:
             print("   ⚠️ Telegram 跳过: 未设置 TELEGRAM_BOT_TOKEN 或 TELEGRAM_CHAT_ID")
@@ -39,7 +38,6 @@ class TelegramBot:
             return False
 
     def format_top10(self, df):
-        """把 Top 10 结果格式化成 Telegram 消息"""
 
         from datetime import datetime
 
@@ -85,7 +83,6 @@ class TelegramBot:
         return msg
 
     def format_watchlist(self, df):
-        """把关注清单格式化成 Telegram 消息"""
 
         from datetime import datetime
 
@@ -116,7 +113,7 @@ class TelegramBot:
 
             msg += f"{emoji} <b>{symbol}</b> — ${close} | {score}分\n"
             msg += f"   AI: {ai_rating} (信心 {confidence}%)\n"
-            msg += f"   💰 买: ${entry} → 目标: ${target} | 🛑 止损: ${stoploss}\n"
+            msg += f"   💰 买: ${entry} → 目标: ${target} | 🛑止损: ${stoploss}\n"
 
             if summary:
                 msg += f"   💡 {summary}\n"
@@ -130,7 +127,6 @@ class TelegramBot:
         return msg
 
     def send_full_report(self, top_df, watchlist_df=None):
-        """发送完整报告：Top 10 + 关注清单"""
 
         msg1 = self.format_top10(top_df)
         self.send(msg1)
