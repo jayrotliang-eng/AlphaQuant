@@ -6,7 +6,6 @@ import requests
 class TelegramBot:
 
     def __init__(self):
-
         self.token = os.getenv("TELEGRAM_BOT_TOKEN")
         self.chat_id = os.getenv("TELEGRAM_CHAT_ID")
         self.base_url = f"https://api.telegram.org/bot{self.token}"
@@ -15,11 +14,10 @@ class TelegramBot:
         """发送消息到 Telegram"""
 
         if not self.token or not self.chat_id:
-            print("⚠️ Telegram 跳过: 未设置 TELEGRAM_BOT_TOKEN 或 TELEGRAM_CHAT_ID")
+            print("   ⚠️ Telegram 跳过: 未设置 TELEGRAM_BOT_TOKEN 或 TELEGRAM_CHAT_ID")
             return False
 
         try:
-
             url = f"{self.base_url}/sendMessage"
             payload = {
                 "chat_id": self.chat_id,
@@ -27,17 +25,17 @@ class TelegramBot:
                 "parse_mode": "HTML"
             }
 
-            response = requests.post(url, json=payload)
+            response = requests.post(url, json=payload, timeout=30)
 
             if response.status_code == 200:
-                print("✅ Telegram 推送成功！")
+                print("   ✅ Telegram 推送成功！")
                 return True
             else:
-                print(f"⚠️ Telegram 推送失败: {response.text}")
+                print(f"   ⚠️ Telegram 推送失败: {response.text}")
                 return False
 
         except Exception as e:
-            print(f"⚠️ Telegram 推送失败: {e}")
+            print(f"   ⚠️ Telegram 推送失败: {e}")
             return False
 
     def format_top10(self, df):
@@ -45,13 +43,13 @@ class TelegramBot:
 
         from datetime import datetime
 
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now().strftime("%Y-%m-%d %H:%M")
 
         msg = f"🏆 <b>AlphaQuant 今日精选</b>\n"
         msg += f"📅 {today}\n"
         msg += f"{'─' * 30}\n\n"
 
-        for _, row in df.iterrows():
+        for _, row in df.head(10).iterrows():
 
             rank = row.get("Rank", "")
             symbol = row.get("Symbol", "")
@@ -63,8 +61,9 @@ class TelegramBot:
             target = row.get("目标价", row.get("AI_Target", ""))
             summary = row.get("一句话总结", "")
             risk = row.get("风险等级", "")
+            watchmark = row.get("是否关注", "")
 
-            msg += f"<b>{rank}. {symbol}</b> — ${close}\n"
+            msg += f"<b>{rank}. {symbol}</b> {watchmark} — ${close}\n"
             msg += f"   评分: {score} | AI: {ai_rating}\n"
 
             if risk:
@@ -84,4 +83,59 @@ class TelegramBot:
         msg += f"✅ 精选 Top 10 推送给你\n"
 
         return msg
+
+    def format_watchlist(self, df):
+        """把关注清单格式化成 Telegram 消息"""
+
+        from datetime import datetime
+
+        today = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+        msg = f"\n⭐ <b>关注清单追踪</b>\n"
+        msg += f"📅 {today}\n"
+        msg += f"{'─' * 30}\n\n"
+
+        for _, row in df.iterrows():
+
+            symbol = row.get("Symbol", "")
+            close = row.get("Close", "")
+            score = row.get("Score", "")
+            ai_rating = row.get("AI评级", "")
+            entry = row.get("买入价", "")
+            stoploss = row.get("止损价", "")
+            target = row.get("目标价", "")
+            summary = row.get("一句话总结", "")
+            confidence = row.get("信心度", 0)
+
+            if "强力买入" in str(ai_rating) or "买入" in str(ai_rating):
+                emoji = "🟢"
+            elif "卖出" in str(ai_rating):
+                emoji = "🔴"
+            else:
+                emoji = "🟡"
+
+            msg += f"{emoji} <b>{symbol}</b> — ${close} | {score}分\n"
+            msg += f"   AI: {ai_rating} (信心 {confidence}%)\n"
+            msg += f"   💰 买: ${entry} → 目标: ${target} | 🛑 止损: ${stoploss}\n"
+
+            if summary:
+                msg += f"   💡 {summary}\n"
+
+            msg += f"\n"
+
+        msg += f"{'─' * 30}\n"
+        msg += f"📌 以上为你的个人关注清单\n"
+        msg += f"⏰ 下次扫描: 自动执行中\n"
+
+        return msg
+
+    def send_full_report(self, top_df, watchlist_df=None):
+        """发送完整报告：Top 10 + 关注清单"""
+
+        msg1 = self.format_top10(top_df)
+        self.send(msg1)
+
+        if watchlist_df is not None and len(watchlist_df) > 0:
+            msg2 = self.format_watchlist(watchlist_df)
+            self.send(msg2)
 
