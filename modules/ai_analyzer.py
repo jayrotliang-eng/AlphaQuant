@@ -59,7 +59,7 @@ class AIAnalyzer:
         if self.groq_available:
             result = self._call_api(
                 self.groq_client,
-                "llama-3.1-70b-versatile",
+                "llama-3.3-70b-versatile",
                 row, fundamentals, news,
                 "Groq"
             )
@@ -71,18 +71,18 @@ class AIAnalyzer:
 
     def _call_api(self, client, model, row, fundamentals, news, source_name):
         """通用 API 调用"""
+        ticker = row.get("ticker", "N/A")
         try:
-            ticker = row.get("ticker", "N/A")
-            price = row.get("close", 0)
-            score = row.get("score", 0)
-            rsi = row.get("rsi", 50)
-            macd = row.get("macd", 0)
-            adx = row.get("adx", 0)
+            price = float(row.get("close", 0) or 0)
+            score = float(row.get("score", 0) or 0)
+            rsi = float(row.get("rsi", 50) or 50)
+            macd = float(row.get("macd", 0) or 0)
+            adx = float(row.get("adx", 0) or 0)
 
             prompt = f"""分析以下股票并给出投资建议（用中文回答）：
 股票: {ticker}
 现价: ${price:.2f}
-技术评分: {score}/100
+技术评分: {score:.0f}/100
 RSI: {rsi:.1f}
 MACD: {macd:.4f}
 ADX: {adx:.1f}
@@ -141,18 +141,28 @@ ADX: {adx:.1f}
 
     def _rule_based_analysis(self, row, fundamentals=None, news=None):
         """纯规则判断 - 不需要任何 API，100% 免费"""
-        price = row.get("close", 0)
-        score = row.get("score", 0)
-        rsi = row.get("rsi", 50)
-        macd = row.get("macd", 0)
-        adx = row.get("adx", 0)
-        sma_20 = row.get("sma_20", price)
-        sma_50 = row.get("sma_50", price)
-        atr = row.get("atr", 0)
+        try:
+            price = float(row.get("close", 0) or 0)
+            score = float(row.get("score", 0) or 0)
+            rsi = float(row.get("rsi", 50) or 50)
+            macd = float(row.get("macd", 0) or 0)
+            adx = float(row.get("adx", 0) or 0)
+            sma_20 = float(row.get("sma_20", price) or price)
+            sma_50 = float(row.get("sma_50", price) or price)
+            atr = float(row.get("atr", 0) or 0)
+        except (ValueError, TypeError):
+            price = 0
+            score = 0
+            rsi = 50
+            macd = 0
+            adx = 0
+            sma_20 = 0
+            sma_50 = 0
+            atr = 0
 
         # 判断趋势
-        trend_up = price > sma_20 > sma_50
-        trend_down = price < sma_20 < sma_50
+        trend_up = price > sma_20 > sma_50 if (price and sma_20 and sma_50) else False
+        trend_down = price < sma_20 < sma_50 if (price and sma_20 and sma_50) else False
         strong_momentum = adx > 25 and macd > 0
 
         # 综合建议
@@ -187,10 +197,13 @@ ADX: {adx:.1f}
 
         # 加入基本面
         if fundamentals:
-            pe = fundamentals.get("pe_ratio", 0)
-            if pe and pe > 0 and pe < 15:
+            try:
+                pe = float(fundamentals.get("pe_ratio", 0) or 0)
+            except (ValueError, TypeError):
+                pe = 0
+            if pe > 0 and pe < 15:
                 reason += "；估值偏低"
-            elif pe and pe > 40:
+            elif pe > 40:
                 reason += "；估值偏高注意风险"
 
         return {
@@ -228,8 +241,13 @@ ADX: {adx:.1f}
 
     def generate_fallback(self, row):
         """最终兜底"""
-        price = row.get("close", 0)
-        score = row.get("score", 0)
+        try:
+            price = float(row.get("close", 0) or 0)
+            score = float(row.get("score", 0) or 0)
+        except (ValueError, TypeError):
+            price = 0
+            score = 0
+            
         if score >= 70:
             suggestion = "买入"
         elif score >= 50:
