@@ -25,15 +25,18 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Create credentials.json
+      - name: Create credentials folder and file
         run: |
-          echo '${{ secrets.GOOGLE_CREDENTIALS }}' > credentials.json
+          mkdir -p credentials
+          echo '${{ secrets.GOOGLE_CREDENTIALS }}' > credentials/credentials.json
 
       - name: Create .env file
         run: |
           echo "OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}" > .env
+          echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}" >> .env
           echo "TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}" >> .env
           echo "TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}" >> .env
+          echo "GOOGLE_CREDENTIALS_FILE=credentials/credentials.json" >> .env
 
       - name: Update S&P500 stock list
         run: python update_sp500.py
@@ -41,8 +44,10 @@ jobs:
       - name: Run AlphaQuant scan
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GOOGLE_CREDENTIALS_FILE: credentials/credentials.json
         run: python main.py
 
       - name: Upload results
