@@ -163,7 +163,7 @@ for index, row in combined.iterrows():
     combined.loc[index, "信心度"] = analysis.get("confidence", 0)
     combined.loc[index, "风险等级"] = str(analysis.get("risk", "N/A"))
     combined.loc[index, "买入价"] = str(analysis.get("entry", "N/A"))
-    combined.loc[index, "止损价"] = str(analysis.get("stoploss", "N/A"))
+    combined.loc[index, "止损价"] = str(analysis.get("stop_loss", "N/A"))
     combined.loc[index, "目标价"] = str(analysis.get("target", "N/A"))
     combined.loc[index, "持有周期"] = str(analysis.get("timeframe", "N/A"))
     combined.loc[index, "技术面评价"] = str(analysis.get("technical_view", "N/A"))
@@ -305,7 +305,8 @@ except Exception as e:
 print(f"\n📱 正在推送到 Telegram...\n")
 
 try:
-    from modules.telegram import TelegramBot
+    from modules.tg_bot import TelegramBot
+
 
     bot = TelegramBot()
     bot.send_full_report(final_top, watchlist_results)

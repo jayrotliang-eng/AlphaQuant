@@ -11,13 +11,15 @@ class AIAnalyzer:
     """
     混合分析器优先级：
     1. OpenRouter（如果有余额）
-    2. Groq（免费，稳定，每天 14400 次）
-    3. 纯规则判断（永远兜底）
+    2. Groq（免费，稳定）
+    3. Together AI（免费 $5 额度）← 新加的！
+    4. 纯规则判断（永远兜底）
     """
 
     def __init__(self):
         self.openrouter_key = os.getenv("OPENROUTER_API_KEY", "")
         self.groq_key = os.getenv("GROQ_API_KEY", "")
+        self.together_key = os.getenv("TOGETHER_API_KEY", "")
         
         # OpenRouter 客户端
         self.openrouter_available = bool(self.openrouter_key)
@@ -41,6 +43,17 @@ class AIAnalyzer:
             except Exception:
                 self.groq_available = False
 
+        # Together AI 客户端（新加）
+        self.together_available = bool(self.together_key)
+        if self.together_available:
+            try:
+                self.together_client = OpenAI(
+                    base_url="https://api.together.xyz/v1",
+                    api_key=self.together_key
+                )
+            except Exception:
+                self.together_available = False
+
     def analyze(self, row, fundamentals=None, news=None):
         """分析单支股票 - 按优先级尝试"""
         
@@ -55,29 +68,40 @@ class AIAnalyzer:
             if result:
                 return result
 
-        # 2. 再试 Groq（免费稳定）
+        # 2. 再试 Groq
         if self.groq_available:
             result = self._call_api(
                 self.groq_client,
-                "llama-3.3-70b-versatile",
+                "compound-beta",
                 row, fundamentals, news,
                 "Groq"
             )
             if result:
                 return result
 
-        # 3. 最后用纯规则判断
+        # 3. 再试 Together AI（新加）
+        if self.together_available:
+            result = self._call_api(
+                self.together_client,
+                "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+                row, fundamentals, news,
+                "Together"
+            )
+            if result:
+                return result
+
+        # 4. 最后用纯规则判断
         return self._rule_based_analysis(row, fundamentals, news)
 
     def _call_api(self, client, model, row, fundamentals, news, source_name):
         """通用 API 调用"""
-        ticker = row.get("ticker", "N/A")
+        ticker = row.get("ticker", row.get("Symbol", "N/A"))
         try:
-            price = float(row.get("close", 0) or 0)
-            score = float(row.get("score", 0) or 0)
-            rsi = float(row.get("rsi", 50) or 50)
-            macd = float(row.get("macd", 0) or 0)
-            adx = float(row.get("adx", 0) or 0)
+            price = float(row.get("close", row.get("Close", 0)) or 0)
+            score = float(row.get("score", row.get("Score", 0)) or 0)
+            rsi = float(row.get("rsi", row.get("RSI", 50)) or 50)
+            macd = float(row.get("macd", row.get("MACD", 0)) or 0)
+            adx = float(row.get("adx", row.get("ADX", 0)) or 0)
 
             prompt = f"""分析以下股票并给出投资建议（用中文回答）：
 股票: {ticker}
@@ -94,7 +118,7 @@ ADX: {adx:.1f}
 
             prompt += """
 请返回 JSON 格式：
-{"建议":"买入/观望/卖出","信心":"高/中/低","理由":"50字以内","目标价":"数字","止损价":"数字"}
+{"rating":"买入/观望/卖出","confidence":60-95的数字,"reason":"50字以内","entry":"建议买入价","target":"目标价","stop_loss":"止损价","hold_period":"持有周期","risk":"高/中/低","summary":"一句话总结"}
 只返回 JSON，不要其他内容。"""
 
             response = client.chat.completions.create(
@@ -112,8 +136,21 @@ ADX: {adx:.1f}
                 content = content.rsplit("```", 1)[0] if "```" in content else content
                 content = content.strip()
 
-            result = json.loads(content)
-            result["分析来源"] = source_name
+            raw = json.loads(content)
+            
+            # 统一转换成英文 key（不管 AI 返回中文还是英文都能处理）
+            result = {
+                "rating": raw.get("rating", raw.get("建议", "观望")),
+                "confidence": self._parse_confidence(raw.get("confidence", raw.get("信心", 60))),
+                "reason": raw.get("reason", raw.get("理由", "AI分析")),
+                "entry": str(raw.get("entry", raw.get("目标价", f"{price:.2f}"))),
+                "target": str(raw.get("target", raw.get("目标价", f"{price * 1.08:.2f}"))),
+                "stop_loss": str(raw.get("stop_loss", raw.get("止损价", f"{price * 0.95:.2f}"))),
+                "hold_period": raw.get("hold_period", raw.get("持有周期", "1-2周")),
+                "risk": raw.get("risk", raw.get("风险", "中")),
+                "summary": raw.get("summary", raw.get("总结", raw.get("reason", raw.get("理由", "AI分析")))),
+                "分析来源": source_name
+            }
             return result
 
         except Exception as e:
@@ -124,12 +161,16 @@ ADX: {adx:.1f}
                     self.openrouter_available = False
                 elif source_name == "Groq":
                     self.groq_available = False
+                elif source_name == "Together":
+                    self.together_available = False
             elif "401" in error_msg or "invalid" in error_msg.lower():
                 print(f"   ⚠️ {source_name} Key 无效，尝试下一个")
                 if source_name == "OpenRouter":
                     self.openrouter_available = False
                 elif source_name == "Groq":
                     self.groq_available = False
+                elif source_name == "Together":
+                    self.together_available = False
             elif "429" in error_msg or "rate" in error_msg.lower():
                 print(f"   ⚠️ {source_name} 频率限制，等待后重试...")
                 import time
@@ -139,17 +180,35 @@ ADX: {adx:.1f}
                 print(f"   ⚠️ {source_name} 失败 ({ticker}): {error_msg[:60]}")
             return None
 
+    def _parse_confidence(self, value):
+        """把信心值统一转成数字"""
+        if isinstance(value, (int, float)):
+            return int(value)
+        if isinstance(value, str):
+            if "高" in value:
+                return 85
+            elif "中" in value:
+                return 70
+            elif "低" in value:
+                return 55
+            else:
+                try:
+                    return int(value)
+                except ValueError:
+                    return 60
+        return 60
+
     def _rule_based_analysis(self, row, fundamentals=None, news=None):
         """纯规则判断 - 不需要任何 API，100% 免费"""
         try:
-            price = float(row.get("close", 0) or 0)
-            score = float(row.get("score", 0) or 0)
-            rsi = float(row.get("rsi", 50) or 50)
-            macd = float(row.get("macd", 0) or 0)
-            adx = float(row.get("adx", 0) or 0)
-            sma_20 = float(row.get("sma_20", price) or price)
-            sma_50 = float(row.get("sma_50", price) or price)
-            atr = float(row.get("atr", 0) or 0)
+            price = float(row.get("close", row.get("Close", 0)) or 0)
+            score = float(row.get("score", row.get("Score", 0)) or 0)
+            rsi = float(row.get("rsi", row.get("RSI", 50)) or 50)
+            macd = float(row.get("macd", row.get("MACD", 0)) or 0)
+            adx = float(row.get("adx", row.get("ADX", 0)) or 0)
+            sma_20 = float(row.get("sma_20", row.get("SMA_20", price)) or price)
+            sma_50 = float(row.get("sma_50", row.get("SMA_50", price)) or price)
+            atr = float(row.get("atr", row.get("ATR", 0)) or 0)
         except (ValueError, TypeError):
             price = 0
             score = 0
@@ -167,24 +226,24 @@ ADX: {adx:.1f}
 
         # 综合建议
         if score >= 75 and trend_up and rsi < 70:
-            suggestion = "买入"
-            confidence = "高" if strong_momentum else "中"
+            rating = "买入"
+            confidence = 85 if strong_momentum else 70
             reason = self._generate_buy_reason(rsi, adx, macd, price, sma_20)
         elif score >= 60 and trend_up:
-            suggestion = "买入"
-            confidence = "中"
+            rating = "买入"
+            confidence = 65
             reason = "趋势向上但动能一般，可轻仓参与"
         elif rsi > 75 or (trend_down and macd < 0):
-            suggestion = "卖出"
-            confidence = "高" if rsi > 80 else "中"
+            rating = "卖出"
+            confidence = 80 if rsi > 80 else 65
             reason = self._generate_sell_reason(rsi, adx, trend_down)
         elif score < 40 or trend_down:
-            suggestion = "观望"
-            confidence = "中"
+            rating = "观望"
+            confidence = 60
             reason = "趋势不明或偏弱，等待明确信号"
         else:
-            suggestion = "观望"
-            confidence = "低"
+            rating = "观望"
+            confidence = 55
             reason = "信号混合，建议等待突破方向确认"
 
         # 计算目标价和止损价
@@ -207,11 +266,15 @@ ADX: {adx:.1f}
                 reason += "；估值偏高注意风险"
 
         return {
-            "建议": suggestion,
-            "信心": confidence,
-            "理由": reason,
-            "目标价": f"{target_price:.2f}",
-            "止损价": f"{stop_loss:.2f}",
+            "rating": rating,
+            "confidence": confidence,
+            "reason": reason,
+            "entry": f"{price:.2f}",
+            "target": f"{target_price:.2f}",
+            "stop_loss": f"{stop_loss:.2f}",
+            "hold_period": "1-2周" if rating == "买入" else "观望",
+            "risk": "低" if confidence >= 80 else ("中" if confidence >= 60 else "高"),
+            "summary": f"{rating}（{reason[:20]}）",
             "分析来源": "规则"
         }
 
@@ -242,24 +305,28 @@ ADX: {adx:.1f}
     def generate_fallback(self, row):
         """最终兜底"""
         try:
-            price = float(row.get("close", 0) or 0)
-            score = float(row.get("score", 0) or 0)
+            price = float(row.get("close", row.get("Close", 0)) or 0)
+            score = float(row.get("score", row.get("Score", 0)) or 0)
         except (ValueError, TypeError):
             price = 0
             score = 0
             
         if score >= 70:
-            suggestion = "买入"
+            rating = "买入"
         elif score >= 50:
-            suggestion = "观望"
+            rating = "观望"
         else:
-            suggestion = "卖出"
+            rating = "卖出"
         return {
-            "建议": suggestion,
-            "信心": "低",
-            "理由": "数据不足，仅供参考",
-            "目标价": f"{price * 1.08:.2f}",
-            "止损价": f"{price * 0.95:.2f}",
+            "rating": rating,
+            "confidence": 50,
+            "reason": "数据不足，仅供参考",
+            "entry": f"{price:.2f}",
+            "target": f"{price * 1.08:.2f}",
+            "stop_loss": f"{price * 0.95:.2f}",
+            "hold_period": "观望",
+            "risk": "高",
+            "summary": f"{rating}（数据不足）",
             "分析来源": "兜底"
         }
 
