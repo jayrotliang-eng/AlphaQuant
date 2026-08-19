@@ -1,6 +1,7 @@
 
 import os
 import json
+import time
 from openai import OpenAI
 from dotenv import load_dotenv
 
@@ -9,324 +10,395 @@ load_dotenv()
 
 class AIAnalyzer:
     """
-    混合分析器优先级：
-    1. OpenRouter（如果有余额）
-    2. Groq（免费，稳定）
-    3. Together AI（免费 $5 额度）← 新加的！
-    4. 纯规则判断（永远兜底）
+    AI 分析器（自动切换模式）
+    优先级：OpenRouter → Groq → 规则兜底
     """
 
     def __init__(self):
-        self.openrouter_key = os.getenv("OPENROUTER_API_KEY", "")
-        self.groq_key = os.getenv("GROQ_API_KEY", "")
-        self.together_key = os.getenv("TOGETHER_API_KEY", "")
-        
-        # OpenRouter 客户端
-        self.openrouter_available = bool(self.openrouter_key)
-        if self.openrouter_available:
-            try:
-                self.openrouter_client = OpenAI(
-                    base_url="https://openrouter.ai/api/v1",
-                    api_key=self.openrouter_key
-                )
-            except Exception:
-                self.openrouter_available = False
+        self.openrouter_key = os.getenv("OPENROUTER_API_KEY")
+        self.groq_key = os.getenv("GROQ_API_KEY")
 
-        # Groq 客户端
-        self.groq_available = bool(self.groq_key)
-        if self.groq_available:
-            try:
-                self.groq_client = OpenAI(
-                    base_url="https://api.groq.com/openai/v1",
-                    api_key=self.groq_key
-                )
-            except Exception:
-                self.groq_available = False
+    def analyze(self, stock_data, fundamentals=None, news=None):
+        """
+        分析单支股票，返回标准格式结果
+        """
+        symbol = stock_data.get("Symbol", stock_data.get("symbol", "UNKNOWN"))
 
-        # Together AI 客户端（新加）
-        self.together_available = bool(self.together_key)
-        if self.together_available:
-            try:
-                self.together_client = OpenAI(
-                    base_url="https://api.together.xyz/v1",
-                    api_key=self.together_key
-                )
-            except Exception:
-                self.together_available = False
+        # 构建 prompt
+        prompt = self._build_prompt(stock_data, fundamentals, news)
 
-    def analyze(self, row, fundamentals=None, news=None):
-        """分析单支股票 - 按优先级尝试"""
-        
-        # 1. 先试 OpenRouter
-        if self.openrouter_available:
-            result = self._call_api(
-                self.openrouter_client, 
-                "deepseek/deepseek-chat",
-                row, fundamentals, news, 
-                "OpenRouter"
-            )
-            if result:
-                return result
+        # 尝试顺序：OpenRouter → Groq → 规则兜底
+        result = None
 
-        # 2. 再试 Groq
-        if self.groq_available:
-            result = self._call_api(
-                self.groq_client,
-                "compound-beta",
-                row, fundamentals, news,
-                "Groq"
-            )
-            if result:
-                return result
+        # 1. 尝试 OpenRouter
+        if self.openrouter_key:
+            result = self._call_openrouter(prompt, symbol)
 
-        # 3. 再试 Together AI（新加）
-        if self.together_available:
-            result = self._call_api(
-                self.together_client,
-                "meta-llama/Llama-3.3-70B-Instruct-Turbo",
-                row, fundamentals, news,
-                "Together"
-            )
-            if result:
-                return result
+        # 2. 尝试 Groq
+        if result is None and self.groq_key:
+            result = self._call_groq(prompt, symbol)
 
-        # 4. 最后用纯规则判断
-        return self._rule_based_analysis(row, fundamentals, news)
+        # 3. 规则兜底
+        if result is None:
+            result = self._rule_based_analysis(stock_data, fundamentals, news)
 
-    def _call_api(self, client, model, row, fundamentals, news, source_name):
-        """通用 API 调用"""
-        ticker = row.get("ticker", row.get("Symbol", "N/A"))
-        try:
-            price = float(row.get("close", row.get("Close", 0)) or 0)
-            score = float(row.get("score", row.get("Score", 0)) or 0)
-            rsi = float(row.get("rsi", row.get("RSI", 50)) or 50)
-            macd = float(row.get("macd", row.get("MACD", 0)) or 0)
-            adx = float(row.get("adx", row.get("ADX", 0)) or 0)
+        return result
 
-            prompt = f"""分析以下股票并给出投资建议（用中文回答）：
-股票: {ticker}
-现价: ${price:.2f}
-技术评分: {score:.0f}/100
-RSI: {rsi:.1f}
-MACD: {macd:.4f}
-ADX: {adx:.1f}
+    def _build_prompt(self, stock_data, fundamentals=None, news=None):
+        """构建 AI 分析 prompt（含技术面 + 基本面 + 新闻）"""
+        symbol = stock_data.get("Symbol", stock_data.get("symbol", "UNKNOWN"))
+        price = float(float(stock_data.get("Close", 0) or stock_data.get("price", 0) or 0) or stock_data.get("close", 0) or stock_data.get("现价", 0) or 0)
+        score = stock_data.get("Score", stock_data.get("score", 0))
+        rsi = stock_data.get("rsi", 0)
+        macd = stock_data.get("macd", 0)
+        adx = stock_data.get("ADX", stock_data.get("adx", 0))
+        atr = stock_data.get("ATR_%", stock_data.get("atr", 0))
+        trend = stock_data.get("trend", "未知")
+
+        prompt = f"""你是专业股票分析师。请分析以下股票并给出投资建议。
+
+## 股票: {symbol}
+- 当前价格: ${price}
+- 技术评分: {score}/100
+- RSI: {rsi}
+- MACD: {macd}
+- ADX: {adx}
+- ATR: {atr}
+- 趋势: {trend}
 """
-            if fundamentals:
-                prompt += f"基本面: {json.dumps(fundamentals, ensure_ascii=False)}\n"
-            if news:
-                prompt += f"新闻情绪: {news}\n"
 
-            prompt += """
-请返回 JSON 格式：
-{"rating":"买入/观望/卖出","confidence":60-95的数字,"reason":"50字以内","entry":"建议买入价","target":"目标价","stop_loss":"止损价","hold_period":"持有周期","risk":"高/中/低","summary":"一句话总结"}
-只返回 JSON，不要其他内容。"""
+        if fundamentals:
+            prompt += f"""
+## 基本面数据:
+{str(fundamentals)[:300]}
+"""
 
+        if news:
+            prompt += f"""
+## 最近新闻/市场情绪:
+{str(news)[:500]}
+"""
+
+        prompt += """
+## 请用以下 JSON 格式回答（不要加任何其他文字）:
+{
+    "rating": "买入/观望/卖出",
+    "confidence": 0-100 的数字,
+    "entry": "建议买入价（数字）",
+    "stop_loss": "止损价（数字）",
+    "hold_period": "建议持有天数（数字）",
+    "reason": "50字内的分析理由"
+}
+"""
+        return prompt
+
+    def _call_openrouter(self, prompt, symbol):
+        """尝试 OpenRouter"""
+        try:
+            client = OpenAI(
+                base_url="https://openrouter.ai/api/v1",
+                api_key=self.openrouter_key
+            )
             response = client.chat.completions.create(
-                model=model,
+                model="meta-llama/llama-3.1-8b-instruct:free",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
-                max_tokens=200
+                max_tokens=300
             )
-
-            content = response.choices[0].message.content.strip()
-            
-            # 清理 markdown 格式
-            if content.startswith("```"):
-                content = content.split("\n", 1)[1] if "\n" in content else content
-                content = content.rsplit("```", 1)[0] if "```" in content else content
-                content = content.strip()
-
-            raw = json.loads(content)
-            
-            # 统一转换成英文 key（不管 AI 返回中文还是英文都能处理）
-            result = {
-                "rating": raw.get("rating", raw.get("建议", "观望")),
-                "confidence": self._parse_confidence(raw.get("confidence", raw.get("信心", 60))),
-                "reason": raw.get("reason", raw.get("理由", "AI分析")),
-                "entry": str(raw.get("entry", raw.get("目标价", f"{price:.2f}"))),
-                "target": str(raw.get("target", raw.get("目标价", f"{price * 1.08:.2f}"))),
-                "stop_loss": str(raw.get("stop_loss", raw.get("止损价", f"{price * 0.95:.2f}"))),
-                "hold_period": raw.get("hold_period", raw.get("持有周期", "1-2周")),
-                "risk": raw.get("risk", raw.get("风险", "中")),
-                "summary": raw.get("summary", raw.get("总结", raw.get("reason", raw.get("理由", "AI分析")))),
-                "分析来源": source_name
-            }
-            return result
-
+            content = response.choices[0].message.content
+            result = self._parse_json(content)
+            if result:
+                result["分析来源"] = "OpenRouter"
+                return result
         except Exception as e:
             error_msg = str(e)
             if "402" in error_msg or "insufficient" in error_msg.lower():
-                print(f"   ⚠️ {source_name} 额度用完，尝试下一个")
-                if source_name == "OpenRouter":
-                    self.openrouter_available = False
-                elif source_name == "Groq":
-                    self.groq_available = False
-                elif source_name == "Together":
-                    self.together_available = False
-            elif "401" in error_msg or "invalid" in error_msg.lower():
-                print(f"   ⚠️ {source_name} Key 无效，尝试下一个")
-                if source_name == "OpenRouter":
-                    self.openrouter_available = False
-                elif source_name == "Groq":
-                    self.groq_available = False
-                elif source_name == "Together":
-                    self.together_available = False
-            elif "429" in error_msg or "rate" in error_msg.lower():
-                print(f"   ⚠️ {source_name} 频率限制，等待后重试...")
-                import time
-                time.sleep(5)
-                return None
+                print(f"   ⚠️ OpenRouter 额度不足，切换到 Groq...")
             else:
-                print(f"   ⚠️ {source_name} 失败 ({ticker}): {error_msg[:60]}")
+                print(f"   ⚠️ OpenRouter 错误: {error_msg[:50]}")
+        return None
+
+    def _call_groq(self, prompt, symbol):
+        """尝试 Groq（使用 compound-beta 模型）"""
+        try:
+            client = OpenAI(
+                base_url="https://api.groq.com/openai/v1",
+                api_key=self.groq_key
+            )
+            response = client.chat.completions.create(
+                model="compound-beta",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=300
+            )
+
+            # compound-beta 返回格式可能非标准，尝试多种方式读取
+            content = None
+            try:
+                # 标准格式
+                content = response.choices[0].message.content
+            except (AttributeError, TypeError, IndexError):
+                try:
+                    # 嵌套 list 格式
+                    choices = response.choices
+                    if isinstance(choices, list) and len(choices) > 0:
+                        first = choices[0]
+                        if isinstance(first, list) and len(first) > 0:
+                            first = first[0]
+                        if hasattr(first, 'message'):
+                            content = first.message.content
+                        elif isinstance(first, dict):
+                            content = first.get('message', {}).get('content', '')
+                except Exception:
+                    pass
+
+            if content:
+                result = self._parse_json(content)
+                if result:
+                    result["分析来源"] = "Groq"
+                    time.sleep(3)  # 防止频率限制
+                    return result
+
+        except Exception as e:
+            error_msg = str(e)
+            if "429" in error_msg or "rate" in error_msg.lower():
+                print(f"   ⚠️ Groq 频率限制，等待...")
+                time.sleep(15)
+            elif "model" in error_msg.lower() and "not found" in error_msg.lower():
+                print(f"   ⚠️ Groq 模型不可用")
+            else:
+                print(f"   ⚠️ Groq 错误: {error_msg[:50]}")
+        return None
+
+    def _parse_json(self, content):
+        """从 AI 回复中解析 JSON"""
+        if not content:
+            return None
+        try:
+            # 尝试直接解析
+            result = json.loads(content)
+            return self._validate_result(result)
+        except json.JSONDecodeError:
+            pass
+
+        # 尝试从 markdown 代码块中提取
+        try:
+            if "```" in content:
+                json_str = content.split("```")[1]
+                if json_str.startswith("json"):
+                    json_str = json_str[4:]
+                result = json.loads(json_str.strip())
+                return self._validate_result(result)
+        except (json.JSONDecodeError, IndexError):
+            pass
+
+        # 尝试找 { } 包裹的部分
+        try:
+            start = content.find("{")
+            end = content.rfind("}") + 1
+            if start >= 0 and end > start:
+                result = json.loads(content[start:end])
+                return self._validate_result(result)
+        except json.JSONDecodeError:
+            pass
+
+        return None
+
+    def _validate_result(self, result):
+        """验证并标准化 AI 返回的结果"""
+        if not isinstance(result, dict):
             return None
 
-    def _parse_confidence(self, value):
-        """把信心值统一转成数字"""
-        if isinstance(value, (int, float)):
-            return int(value)
-        if isinstance(value, str):
-            if "高" in value:
-                return 85
-            elif "中" in value:
-                return 70
-            elif "低" in value:
-                return 55
-            else:
-                try:
-                    return int(value)
-                except ValueError:
-                    return 60
-        return 60
-
-    def _rule_based_analysis(self, row, fundamentals=None, news=None):
-        """纯规则判断 - 不需要任何 API，100% 免费"""
+        # 标准化 key（支持中英文）
+        standardized = {}
+        
+        # rating（建议）
+        standardized["rating"] = (
+            result.get("rating") or 
+            result.get("建议") or 
+            "观望"
+        )
+        
+        # confidence（信心）
+        conf = result.get("confidence") or result.get("信心") or 50
         try:
-            price = float(row.get("close", row.get("Close", 0)) or 0)
-            score = float(row.get("score", row.get("Score", 0)) or 0)
-            rsi = float(row.get("rsi", row.get("RSI", 50)) or 50)
-            macd = float(row.get("macd", row.get("MACD", 0)) or 0)
-            adx = float(row.get("adx", row.get("ADX", 0)) or 0)
-            sma_20 = float(row.get("sma_20", row.get("SMA_20", price)) or price)
-            sma_50 = float(row.get("sma_50", row.get("SMA_50", price)) or price)
-            atr = float(row.get("atr", row.get("ATR", 0)) or 0)
+            standardized["confidence"] = int(float(str(conf).replace("%", "")))
         except (ValueError, TypeError):
-            price = 0
-            score = 0
-            rsi = 50
-            macd = 0
-            adx = 0
-            sma_20 = 0
-            sma_50 = 0
-            atr = 0
+            standardized["confidence"] = 50
 
-        # 判断趋势
-        trend_up = price > sma_20 > sma_50 if (price and sma_20 and sma_50) else False
-        trend_down = price < sma_20 < sma_50 if (price and sma_20 and sma_50) else False
-        strong_momentum = adx > 25 and macd > 0
+        # entry（买入价）
+        entry = result.get("entry") or result.get("目标价") or result.get("建议买入价") or "N/A"
+        standardized["entry"] = str(entry).replace("$", "").strip()
 
-        # 综合建议
-        if score >= 75 and trend_up and rsi < 70:
+        # stop_loss（止损价）
+        stop = result.get("stop_loss") or result.get("止损价") or result.get("止损") or "N/A"
+        standardized["stop_loss"] = str(stop).replace("$", "").strip()
+
+        # hold_period（持有天数）
+        hold = result.get("hold_period") or result.get("持有天数") or result.get("建议持有") or "N/A"
+        standardized["hold_period"] = str(hold).replace("天", "").strip()
+
+        # reason（理由）
+        standardized["reason"] = (
+            result.get("reason") or 
+            result.get("理由") or 
+            result.get("分析理由") or 
+            "AI 综合分析"
+        )
+
+        # 补充 main.py 需要的其他 key
+        standardized["risk"] = "中"
+        # target 保持原值不覆盖
+        standardized["timeframe"] = standardized.get("hold_period", "5-10")
+        standardized["technical_view"] = standardized.get("reason", "")
+        standardized["fundamental_view"] = ""
+        standardized["news_view"] = ""
+        standardized["summary"] = standardized.get("reason", "综合分析")
+        standardized["source"] = result.get("分析来源", result.get("source", "规则"))
+        standardized["target"] = str(result.get("target", result.get("目标价", "N/A"))).replace("$", "").strip()
+        # Fallback: 如果 target 是 N/A，用 entry * 1.05
+        if standardized.get("target") in [None, "N\/A", "", "0"]:
+            try:
+                entry_val = float(standardized.get("entry", 0))
+                if entry_val > 0:
+                    standardized["target"] = f"{entry_val * 1.05:.2f}"
+            except:
+                pass
+        standardized["action"] = standardized.get("rating", "观望")
+
+        return standardized
+
+    def _rule_based_analysis(self, stock_data, fundamentals=None, news=None):
+        """规则兜底（强化版 - 技术面 + 基本面 + 新闻综合判断）"""
+        symbol = stock_data.get("Symbol", stock_data.get("symbol", "UNKNOWN"))
+        price = float(float(stock_data.get("Close", 0) or stock_data.get("price", 0) or 0))
+        score = float(stock_data.get("Score", stock_data.get("score", 0)))
+        rsi = float(stock_data.get("RSI", stock_data.get("rsi", 50)))
+        adx = float(stock_data.get("ADX", stock_data.get("adx", 0)))
+        atr = float(stock_data.get("ATR_%", stock_data.get("atr", 0)))
+        trend = stock_data.get("Trend", stock_data.get("trend", ""))
+
+        # ===== 技术面评分 =====
+        tech_score = 0
+        reasons = []
+
+        # RSI 判断
+        if rsi < 30:
+            tech_score += 20
+            reasons.append("RSI 超卖")
+        elif rsi < 45:
+            tech_score += 10
+            reasons.append("RSI 偏低")
+        elif rsi > 70:
+            tech_score -= 20
+            reasons.append("RSI 超买")
+        elif rsi > 55:
+            tech_score += 5
+
+        # 趋势判断
+        if "上涨" in str(trend) or "up" in str(trend).lower():
+            tech_score += 20
+            reasons.append("趋势向上")
+        elif "下跌" in str(trend) or "down" in str(trend).lower():
+            tech_score -= 20
+            reasons.append("趋势向下")
+
+        # ADX 判断
+        if adx > 25:
+            tech_score += 10
+            reasons.append("趋势强劲")
+
+        # 综合评分
+        if score >= 80:
+            tech_score += 20
+            reasons.append("技术评分高")
+        elif score >= 60:
+            tech_score += 10
+
+        # ===== 基本面加分 =====
+        fundamental_score = 0
+        if fundamentals and isinstance(fundamentals, dict):
+            pe = fundamentals.get("pe_ratio") or fundamentals.get("PE")
+            revenue_growth = fundamentals.get("revenue_growth") or fundamentals.get("营收成长")
+            
+            if pe and pe != "N/A":
+                try:
+                    pe_val = float(str(pe).replace("%", ""))
+                    if 5 < pe_val < 20:
+                        fundamental_score += 15
+                        reasons.append("估值合理")
+                    elif pe_val > 50:
+                        fundamental_score -= 10
+                        reasons.append("估值偏高")
+                except (ValueError, TypeError):
+                    pass
+
+            if revenue_growth and revenue_growth != "N/A":
+                try:
+                    growth_val = float(str(revenue_growth).replace("%", "").replace("+", ""))
+                    if growth_val > 20:
+                        fundamental_score += 15
+                        reasons.append("高速成长")
+                    elif growth_val > 10:
+                        fundamental_score += 10
+                        reasons.append("稳定成长")
+                except (ValueError, TypeError):
+                    pass
+
+        # ===== 新闻加分 =====
+        news_score = 0
+        if news and isinstance(news, dict):
+            sentiment = news.get("sentiment") or news.get("情绪")
+            if sentiment:
+                sentiment_str = str(sentiment).lower()
+                if "正面" in sentiment_str or "positive" in sentiment_str or "bullish" in sentiment_str:
+                    news_score += 10
+                    reasons.append("新闻正面")
+                elif "负面" in sentiment_str or "negative" in sentiment_str or "bearish" in sentiment_str:
+                    news_score -= 10
+                    reasons.append("新闻负面")
+
+        # ===== 综合判断 =====
+        total_score = tech_score + fundamental_score + news_score
+
+        if total_score >= 30:
             rating = "买入"
-            confidence = 85 if strong_momentum else 70
-            reason = self._generate_buy_reason(rsi, adx, macd, price, sma_20)
-        elif score >= 60 and trend_up:
-            rating = "买入"
-            confidence = 65
-            reason = "趋势向上但动能一般，可轻仓参与"
-        elif rsi > 75 or (trend_down and macd < 0):
+            confidence = min(85, 60 + total_score)
+        elif total_score >= 10:
+            rating = "观望（偏多）"
+            confidence = min(70, 50 + total_score)
+        elif total_score <= -20:
             rating = "卖出"
-            confidence = 80 if rsi > 80 else 65
-            reason = self._generate_sell_reason(rsi, adx, trend_down)
-        elif score < 40 or trend_down:
-            rating = "观望"
-            confidence = 60
-            reason = "趋势不明或偏弱，等待明确信号"
+            confidence = min(80, 50 + abs(total_score))
         else:
             rating = "观望"
-            confidence = 55
-            reason = "信号混合，建议等待突破方向确认"
+            confidence = 50
 
         # 计算目标价和止损价
-        if atr > 0:
-            target_price = price + (atr * 2.5)
-            stop_loss = price - (atr * 1.5)
-        else:
-            target_price = price * 1.08
-            stop_loss = price * 0.95
+        atr_val = atr if atr > 0 else price * 0.02
+        entry = f"{price * 0.99:.2f}"  # 建议在当前价下方 1% 买入
+        stop_loss = f"{price - (atr_val * 2):.2f}"  # 止损: 2倍 ATR
+        target = f"{price + (atr_val * 3):.2f}"  # 目标: 3倍 ATR
 
-        # 加入基本面
-        if fundamentals:
-            try:
-                pe = float(fundamentals.get("pe_ratio", 0) or 0)
-            except (ValueError, TypeError):
-                pe = 0
-            if pe > 0 and pe < 15:
-                reason += "；估值偏低"
-            elif pe > 40:
-                reason += "；估值偏高注意风险"
+        reason = "；".join(reasons[:3]) if reasons else f"{symbol}（数据不足）"
+
+        target = f"{price + (atr_val * 3):.2f}"
 
         return {
             "rating": rating,
             "confidence": confidence,
+            "entry": entry,
+            "stop_loss": stop_loss,
+            "hold_period": "5-10",
+            "target": target,
+            "risk": "中" if total_score >= 0 else "高",
+            "timeframe": "5-10天",
+            "technical_view": reason,
+            "fundamental_view": "基本面正常" if fundamental_score >= 0 else "基本面偏弱",
+            "news_view": "新闻正面" if news_score > 0 else ("新闻负面" if news_score < 0 else "新闻中性"),
+            "summary": reason,
+            "action": rating,
             "reason": reason,
-            "entry": f"{price:.2f}",
-            "target": f"{target_price:.2f}",
-            "stop_loss": f"{stop_loss:.2f}",
-            "hold_period": "1-2周" if rating == "买入" else "观望",
-            "risk": "低" if confidence >= 80 else ("中" if confidence >= 60 else "高"),
-            "summary": f"{rating}（{reason[:20]}）",
             "分析来源": "规则"
-        }
-
-    def _generate_buy_reason(self, rsi, adx, macd, price, sma_20):
-        reasons = []
-        if adx > 30:
-            reasons.append("趋势强劲")
-        if macd > 0:
-            reasons.append("MACD金叉")
-        if rsi < 50:
-            reasons.append("RSI低位反弹")
-        elif rsi < 65:
-            reasons.append("动能充足")
-        if price > sma_20:
-            reasons.append("站上均线")
-        return "，".join(reasons[:3]) if reasons else "多项指标看好"
-
-    def _generate_sell_reason(self, rsi, adx, trend_down):
-        reasons = []
-        if rsi > 75:
-            reasons.append("RSI超买")
-        if trend_down:
-            reasons.append("趋势转弱")
-        if adx > 25:
-            reasons.append("下跌动能强")
-        return "，".join(reasons[:3]) if reasons else "技术面转弱建议减仓"
-
-    def generate_fallback(self, row):
-        """最终兜底"""
-        try:
-            price = float(row.get("close", row.get("Close", 0)) or 0)
-            score = float(row.get("score", row.get("Score", 0)) or 0)
-        except (ValueError, TypeError):
-            price = 0
-            score = 0
-            
-        if score >= 70:
-            rating = "买入"
-        elif score >= 50:
-            rating = "观望"
-        else:
-            rating = "卖出"
-        return {
-            "rating": rating,
-            "confidence": 50,
-            "reason": "数据不足，仅供参考",
-            "entry": f"{price:.2f}",
-            "target": f"{price * 1.08:.2f}",
-            "stop_loss": f"{price * 0.95:.2f}",
-            "hold_period": "观望",
-            "risk": "高",
-            "summary": f"{rating}（数据不足）",
-            "分析来源": "兜底"
         }
 
